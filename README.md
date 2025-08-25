@@ -1,6 +1,3 @@
-# ETHKipu
-
-
 # Artur Simon - Web3 Developer Portfolio
 
 ## About Me
