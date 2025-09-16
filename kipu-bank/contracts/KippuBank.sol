@@ -5,7 +5,6 @@ pragma solidity >=0.7.0 <0.9.0;
 /// @title KipuBank
 /// @author Artur Simon
 /// @notice This contract is a bank that holds currency to a max cap
-/// @dev 
 contract KipuBank {
 
     // -- Constants --
