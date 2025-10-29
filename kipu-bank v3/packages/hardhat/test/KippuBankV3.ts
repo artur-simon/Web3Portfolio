@@ -10,9 +10,9 @@ describe("KippuBankV3", function () {
   let user1: HardhatEthersSigner;
   let user2: HardhatEthersSigner;
 
-  const ETH_ADDRESS = "0x0000000000000000000000000000000000000001";
-  const BANK_CAP_USDC = BigInt(1_000_000) * BigInt(10 ** 6);
-  const MAX_WITHDRAW_PER_TX_USDC = BigInt(10_000) * BigInt(10 ** 6);
+  const ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"; // ERC-7528 canonical alias
+  const BANK_CAP_USD8 = BigInt(1_000_000) * BigInt(10 ** 8); // 8 decimals
+  const MAX_WITHDRAW_PER_TX_USD8 = BigInt(10_000) * BigInt(10 ** 8); // 8 decimals
   const ETH_PRICE_8_DECIMALS = 200000000000n;
 
   beforeEach(async () => {
@@ -25,8 +25,8 @@ describe("KippuBankV3", function () {
     const KipuBankV3Factory = await ethers.getContractFactory("KipuBankV3");
     kippuBank = (await KipuBankV3Factory.deploy(
       await mockOracle.getAddress(),
-      BANK_CAP_USDC,
-      MAX_WITHDRAW_PER_TX_USDC,
+      BANK_CAP_USD8,
+      MAX_WITHDRAW_PER_TX_USD8,
     )) as KipuBankV3;
     await kippuBank.waitForDeployment();
   });
@@ -37,11 +37,11 @@ describe("KippuBankV3", function () {
     });
 
     it("Should set the correct bank cap", async function () {
-      expect(await kippuBank.BANK_CAP_USDC()).to.equal(BANK_CAP_USDC);
+      expect(await kippuBank.BANK_CAP_USD8()).to.equal(BANK_CAP_USD8);
     });
 
     it("Should set the correct max withdraw per tx", async function () {
-      expect(await kippuBank.MAX_WITHDRAW_PER_TX_USDC()).to.equal(MAX_WITHDRAW_PER_TX_USDC);
+      expect(await kippuBank.MAX_WITHDRAW_PER_TX_USD8()).to.equal(MAX_WITHDRAW_PER_TX_USD8);
     });
 
     it("Should grant admin role to deployer", async function () {
@@ -50,7 +50,7 @@ describe("KippuBankV3", function () {
     });
 
     it("Should initialize with zero balances", async function () {
-      expect(await kippuBank.totalBankBalanceUSDC()).to.equal(0);
+      expect(await kippuBank.totalBankBalanceUSD8()).to.equal(0);
       expect(await kippuBank.depositCount()).to.equal(0);
       expect(await kippuBank.withdrawCount()).to.equal(0);
     });
@@ -62,7 +62,7 @@ describe("KippuBankV3", function () {
 
       await expect(kippuBank.connect(user1).depositETH({ value: depositAmount }))
         .to.emit(kippuBank, "Deposit")
-        .withArgs(user1.address, ETH_ADDRESS, depositAmount, 2000n * 10n ** 6n);
+        .withArgs(user1.address, ETH_ADDRESS, depositAmount, 2000n * 10n ** 8n);
 
       expect(await kippuBank.checkBalance(user1.address, ETH_ADDRESS)).to.equal(depositAmount);
       expect(await kippuBank.depositCount()).to.equal(1);
@@ -72,8 +72,8 @@ describe("KippuBankV3", function () {
       const depositAmount = ethers.parseEther("1.0");
       await kippuBank.connect(user1).depositETH({ value: depositAmount });
 
-      const expectedUSDC = 2000n * 10n ** 6n;
-      expect(await kippuBank.totalBankBalanceUSDC()).to.equal(expectedUSDC);
+      const expectedUSD8 = 2000n * 10n ** 8n;
+      expect(await kippuBank.totalBankBalanceUSD8()).to.equal(expectedUSD8);
     });
 
     it("Should reject zero amount deposits", async function () {
@@ -105,8 +105,8 @@ describe("KippuBankV3", function () {
       const depositAmount = ethers.parseEther("100");
       await kippuBank.connect(user1).depositETH({ value: depositAmount });
 
-      const remaining = await kippuBank.remainingBankCapacityUSDC();
-      expect(remaining).to.be.lessThan(BANK_CAP_USDC);
+      const remaining = await kippuBank.remainingBankCapacityUSD8();
+      expect(remaining).to.be.lessThan(BANK_CAP_USD8);
       expect(remaining).to.be.greaterThan(0);
     });
   });
@@ -137,7 +137,7 @@ describe("KippuBankV3", function () {
 
       await expect(kippuBank.connect(user1).withdraw(ETH_ADDRESS, withdrawAmount))
         .to.emit(kippuBank, "Withdraw")
-        .withArgs(user1.address, ETH_ADDRESS, withdrawAmount, 2000n * 10n ** 6n);
+        .withArgs(user1.address, ETH_ADDRESS, withdrawAmount, 2000n * 10n ** 8n);
     });
 
     it("Should reject zero amount withdrawals", async function () {
@@ -162,16 +162,16 @@ describe("KippuBankV3", function () {
       const largeWithdraw = ethers.parseEther("10");
       await expect(
         kippuBank.connect(user2).withdraw(ETH_ADDRESS, largeWithdraw),
-      ).to.be.revertedWithCustomError(kippuBank, "WithdrawLimitPerTx");
+      ).to.be.revertedWithCustomError(kippuBank, "WithdrawLimitPerTxUSD");
     });
 
     it("Should update total bank balance after withdrawal", async function () {
-      const initialTotalBalance = await kippuBank.totalBankBalanceUSDC();
+      const initialTotalBalance = await kippuBank.totalBankBalanceUSD8();
       const withdrawAmount = ethers.parseEther("1");
 
       await kippuBank.connect(user1).withdraw(ETH_ADDRESS, withdrawAmount);
 
-      const finalTotalBalance = await kippuBank.totalBankBalanceUSDC();
+      const finalTotalBalance = await kippuBank.totalBankBalanceUSD8();
       expect(finalTotalBalance).to.be.lessThan(initialTotalBalance);
     });
   });
@@ -199,10 +199,10 @@ describe("KippuBankV3", function () {
       const depositAmount = ethers.parseEther("1");
       await kippuBank.connect(user1).depositETH({ value: depositAmount });
 
-      const remaining = await kippuBank.remainingBankCapacityUSDC();
-      const totalBalance = await kippuBank.totalBankBalanceUSDC();
+      const remaining = await kippuBank.remainingBankCapacityUSD8();
+      const totalBalance = await kippuBank.totalBankBalanceUSD8();
 
-      expect(remaining + totalBalance).to.equal(BANK_CAP_USDC);
+      expect(remaining + totalBalance).to.equal(BANK_CAP_USD8);
     });
   });
 
@@ -248,8 +248,8 @@ describe("KippuBankV3", function () {
       const depositAmount = ethers.parseEther("1");
       await kippuBank.connect(user1).depositETH({ value: depositAmount });
 
-      const expectedUSDC = 2500n * 10n ** 6n;
-      expect(await kippuBank.totalBankBalanceUSDC()).to.equal(expectedUSDC);
+      const expectedUSD8 = 2500n * 10n ** 8n;
+      expect(await kippuBank.totalBankBalanceUSD8()).to.equal(expectedUSD8);
     });
 
     it("Should verify admin role exists", async function () {

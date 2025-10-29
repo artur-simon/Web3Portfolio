@@ -28,21 +28,21 @@ const deployKippuBank: DeployFunction = async function (hre: HardhatRuntimeEnvir
     throw new Error(`No ETH/USD oracle configured for chain ID ${chainId}`);
   }
 
-  const bankCapUsdc = BigInt(1_000_000) * BigInt(10 ** 6);
-  const maxWithdrawPerTxUsdc = BigInt(10_000) * BigInt(10 ** 6);
+  const bankCapUsd8 = BigInt(1_000_000) * BigInt(10 ** 8);
+  const maxWithdrawPerTxUsd8 = BigInt(10_000) * BigInt(10 ** 8);
 
   console.log("Deploying KipuBankV3...");
   await deploy("KipuBankV3", {
     from: deployer,
-    args: [ethUsdOracleAddress, bankCapUsdc, maxWithdrawPerTxUsdc],
+    args: [ethUsdOracleAddress, bankCapUsd8, maxWithdrawPerTxUsd8],
     log: true,
     autoMine: true,
   });
 
   const kippuBank = await hre.ethers.getContract<Contract>("KipuBankV3", deployer);
   console.log("KipuBankV3 deployed successfully");
-  console.log("Bank Cap (USDC):", await kippuBank.BANK_CAP_USDC());
-  console.log("Max Withdraw Per Tx (USDC):", await kippuBank.MAX_WITHDRAW_PER_TX_USDC());
+  console.log("Bank Cap (USD8):", await kippuBank.BANK_CAP_USD8());
+  console.log("Max Withdraw Per Tx (USD8):", await kippuBank.MAX_WITHDRAW_PER_TX_USD8());
 };
 
 export default deployKippuBank;
