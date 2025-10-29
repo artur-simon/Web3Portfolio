@@ -23,11 +23,21 @@ describe("KipuBankV3 Fixes", function () {
     mockOracle = (await MockV3AggregatorFactory.deploy(8, ETH_PRICE_8_DECIMALS)) as MockV3Aggregator;
     await mockOracle.waitForDeployment();
 
+    const MockUSDCFactory = await ethers.getContractFactory("MockUSDC");
+    const mockUSDC = await MockUSDCFactory.deploy();
+    await mockUSDC.waitForDeployment();
+
+    const MockUniversalRouterFactory = await ethers.getContractFactory("MockUniversalRouter");
+    const mockRouter = await MockUniversalRouterFactory.deploy();
+    await mockRouter.waitForDeployment();
+
     const KipuBankV3Factory = await ethers.getContractFactory("KipuBankV3");
     kippuBank = (await KipuBankV3Factory.deploy(
       await mockOracle.getAddress(),
       BANK_CAP_USD8,
       MAX_WITHDRAW_PER_TX_USD8,
+      await mockUSDC.getAddress(),
+      await mockRouter.getAddress(),
     )) as KipuBankV3;
     await kippuBank.waitForDeployment();
   });
