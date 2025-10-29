@@ -21,6 +21,9 @@ contract KipuBankV3 is AccessControl {
     uint256 public immutable BANK_CAP_USD8; // bank cap expressed in USD with 8 decimals (matching Chainlink feeds)
     uint256 public immutable MAX_WITHDRAW_PER_TX_USD8; // per-tx withdraw cap in USD with 8 decimals
 
+    address public immutable USDC;
+    address public immutable universalRouter;
+
     // Per-tx native ETH cap in wei (0 = no cap)
     uint256 public nativePerTxCapWei;
     
@@ -37,6 +40,8 @@ contract KipuBankV3 is AccessControl {
     mapping(address => AggregatorV3Interface) public priceFeeds;
     // token => decimals (cached from token contract on registration)
     mapping(address => uint8) public tokenDecimals;
+    // token => is supported for Uniswap swaps
+    mapping(address => bool) public supportedTokens;
 
     // Total bank accounting in USD with 8 decimals (matching Chainlink feeds)
     uint256 public totalBankBalanceUSD8;
@@ -53,6 +58,9 @@ contract KipuBankV3 is AccessControl {
     event PriceFeedUpdated(address indexed token, address indexed newFeed);
     event AdminRecover(address indexed user, address indexed token, uint256 oldBalance, uint256 newBalance, bytes32 reason);
     event NativePerTxCapWeiUpdated(uint256 oldCap, uint256 newCap);
+    event TokenSwapped(address indexed user, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event SupportedTokenAdded(address indexed token);
+    event SupportedTokenRemoved(address indexed token);
 
     // errors
     error WithdrawLimitPerTxUSD(uint256 attemptedUSD8, uint256 limitUSD8);
@@ -65,6 +73,8 @@ contract KipuBankV3 is AccessControl {
     error TokenNotSupported(address token);
     error InvalidPrice();
     error StalePrice(uint256 timestamp, uint256 maxAge);
+    error SwapFailed();
+    error TokenNotSupportedForSwap(address token);
 
     // reentrancy guard
     bool internal _locked;
@@ -78,11 +88,21 @@ contract KipuBankV3 is AccessControl {
     /// @param _ethUsdOracle address of Chainlink ETH/USD feed
     /// @param bankCapUsd8 cap expressed in USD with 8 decimals, e.g., 1_000_000e8 == $1,000,000
     /// @param maxWithdrawPerTxUsd8 per-tx withdraw cap expressed in USD with 8 decimals
+    /// @param _usdc address of USDC token contract
+    /// @param _universalRouter address of Uniswap V4 UniversalRouter
     /// used 0x694AA1769357215DE4FAC081bf1f309aDC325306 for sepolia network, from https://docs.chain.link/data-feeds/getting-started
-    constructor(address _ethUsdOracle, uint256 bankCapUsd8, uint256 maxWithdrawPerTxUsd8) {
+    constructor(
+        address _ethUsdOracle,
+        uint256 bankCapUsd8,
+        uint256 maxWithdrawPerTxUsd8,
+        address _usdc,
+        address _universalRouter
+    ) {
         require(_ethUsdOracle != address(0), "ethUsdOracle required");
         require(bankCapUsd8 > 0, "bank cap required");
         require(maxWithdrawPerTxUsd8 > 0, "max withdraw per tx required");
+        require(_usdc != address(0), "USDC required");
+        require(_universalRouter != address(0), "universalRouter required");
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
@@ -90,6 +110,8 @@ contract KipuBankV3 is AccessControl {
         ethUsdOracle = AggregatorV3Interface(_ethUsdOracle);
         BANK_CAP_USD8 = bankCapUsd8;
         MAX_WITHDRAW_PER_TX_USD8 = maxWithdrawPerTxUsd8;
+        USDC = _usdc;
+        universalRouter = _universalRouter;
     }
 
     // INTERNAL HELPERS
@@ -98,6 +120,25 @@ contract KipuBankV3 is AccessControl {
     /// @param token address(0) or ETH_ALIAS become ETH_ALIAS; all others pass through
     function _canonicalizeToken(address token) internal pure returns (address) {
         return (token == address(0) || token == ETH_ALIAS) ? ETH_ALIAS : token;
+    }
+
+    /// @dev Internal helper for ERC20 deposits (no reentrancy guard, no token transfer)
+    function _depositERC20Internal(address canonToken, uint256 amount) internal returns (uint256) {
+        uint256 amountInUSD8 = _convertToUSD8(canonToken, amount);
+
+        if (totalBankBalanceUSD8 + amountInUSD8 > BANK_CAP_USD8) {
+            uint256 remaining = BANK_CAP_USD8 > totalBankBalanceUSD8 ? BANK_CAP_USD8 - totalBankBalanceUSD8 : 0;
+            IERC20(canonToken).safeTransfer(msg.sender, amount);
+            revert DepositExceedsBankCap(amountInUSD8, remaining);
+        }
+
+        _balances[msg.sender][canonToken] += amount;
+        _totalTokenBalances[canonToken] += amount;
+        totalBankBalanceUSD8 += amountInUSD8;
+        unchecked { depositCount += 1; }
+
+        emit Deposit(msg.sender, canonToken, amount, amountInUSD8);
+        return _balances[msg.sender][canonToken];
     }
 
     // ADMIN FUNCTIONS
@@ -167,6 +208,21 @@ contract KipuBankV3 is AccessControl {
         emit AdminRecover(user, canonToken, oldBalance, newBalance, reason);
     }
 
+    /// @notice ADMIN: Mark a token as supported for Uniswap swaps
+    /// @param token token address to support
+    function addSupportedToken(address token) external onlyRole(ADMIN_ROLE) {
+        require(token != address(0) && token != ETH_ALIAS, "Invalid token");
+        supportedTokens[token] = true;
+        emit SupportedTokenAdded(token);
+    }
+
+    /// @notice ADMIN: Remove a token from supported swaps
+    /// @param token token address to remove
+    function removeSupportedToken(address token) external onlyRole(ADMIN_ROLE) {
+        supportedTokens[token] = false;
+        emit SupportedTokenRemoved(token);
+    }
+
     // DEPOSIT / WITHDRAW
 
     function depositETH() external payable noReentrant returns (uint256 userBalance) {
@@ -197,27 +253,46 @@ contract KipuBankV3 is AccessControl {
         if (canonToken == ETH_ALIAS) revert("use depositETH()");
         if (priceFeeds[canonToken] == AggregatorV3Interface(address(0))) revert TokenNotSupported(canonToken);
 
-        // transfer token in
         IERC20(canonToken).safeTransferFrom(msg.sender, address(this), amount);
 
-        uint256 amountInUSD8 = _convertToUSD8(canonToken, amount);
+        return _depositERC20Internal(canonToken, amount);
+    }
 
-        // bank capacity check
+    /// Deposit arbitrary ERC20 token with automatic swap to USDC via Uniswap V4
+    /// @param token address of token to deposit
+    /// @param amount amount of token to deposit
+    /// @return userBalance user's updated USDC balance in the bank
+    function depositArbitraryToken(address token, uint256 amount) external noReentrant returns (uint256 userBalance) {
+        if (amount == 0) revert ZeroAmount();
+        address canonToken = _canonicalizeToken(token);
+        if (canonToken == ETH_ALIAS) revert("use depositETH()");
+
+        IERC20(canonToken).safeTransferFrom(msg.sender, address(this), amount);
+
+        if (canonToken == USDC) {
+            if (priceFeeds[USDC] == AggregatorV3Interface(address(0))) revert TokenNotSupported(USDC);
+            return _depositERC20Internal(USDC, amount);
+        }
+
+        if (!supportedTokens[canonToken]) revert TokenNotSupportedForSwap(canonToken);
+
+        uint256 usdcReceived = _swapExactInputSingle(canonToken, amount);
+
+        uint256 amountInUSD8 = _convertToUSD8(USDC, usdcReceived);
+
         if (totalBankBalanceUSD8 + amountInUSD8 > BANK_CAP_USD8) {
             uint256 remaining = BANK_CAP_USD8 > totalBankBalanceUSD8 ? BANK_CAP_USD8 - totalBankBalanceUSD8 : 0;
-            // return tokens to sender to avoid locking funds
-            IERC20(canonToken).safeTransfer(msg.sender, amount);
+            IERC20(USDC).safeTransfer(msg.sender, usdcReceived);
             revert DepositExceedsBankCap(amountInUSD8, remaining);
         }
 
-        // effects
-        _balances[msg.sender][canonToken] += amount;
-        _totalTokenBalances[canonToken] += amount;
+        _balances[msg.sender][USDC] += usdcReceived;
+        _totalTokenBalances[USDC] += usdcReceived;
         totalBankBalanceUSD8 += amountInUSD8;
         unchecked { depositCount += 1; }
 
-        emit Deposit(msg.sender, canonToken, amount, amountInUSD8);
-        return _balances[msg.sender][canonToken];
+        emit Deposit(msg.sender, USDC, usdcReceived, amountInUSD8);
+        return _balances[msg.sender][USDC];
     }
 
     /// Withdraw tokens (ETH or ERC20)
@@ -296,6 +371,34 @@ contract KipuBankV3 is AccessControl {
 
         // usd8 = amount * price8 / 10^decimals
         return (uint256(price) * amount) / (10 ** uint256(decimals));
+    }
+
+    /// @dev Swap tokenIn to USDC using Uniswap V4 UniversalRouter
+    /// @param tokenIn address of input token
+    /// @param amountIn amount of input token
+    /// @return amountOut amount of USDC received
+    function _swapExactInputSingle(address tokenIn, uint256 amountIn) internal returns (uint256 amountOut) {
+        uint256 usdcBefore = IERC20(USDC).balanceOf(address(this));
+
+        IERC20(tokenIn).forceApprove(universalRouter, amountIn);
+
+        bytes memory commands = abi.encodePacked(uint8(0x00));
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(tokenIn, USDC, amountIn, uint256(0), address(this));
+
+        (bool success, ) = universalRouter.call(
+            abi.encodeWithSignature("execute(bytes,bytes[])", commands, inputs)
+        );
+        if (!success) revert SwapFailed();
+
+        uint256 usdcAfter = IERC20(USDC).balanceOf(address(this));
+        amountOut = usdcAfter - usdcBefore;
+
+        if (amountOut == 0) revert SwapFailed();
+
+        emit TokenSwapped(msg.sender, tokenIn, USDC, amountIn, amountOut);
+
+        IERC20(tokenIn).forceApprove(universalRouter, 0);
     }
 
     receive() external payable {
