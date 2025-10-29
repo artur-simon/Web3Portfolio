@@ -99,14 +99,17 @@ const deployKippuBank: DeployFunction = async function (hre: HardhatRuntimeEnvir
     const routerContract = await hre.ethers.getContract<Contract>("MockUniversalRouter", deployer);
     const usdcContract = await hre.ethers.getContract<Contract>("MockUSDC", deployer);
     
-    await routerContract.setExchangeRate(mockDAI.address, usdcAddress, BigInt(10 ** 18));
+    const tx1 = await routerContract.setExchangeRate(mockDAI.address, usdcAddress, BigInt(10 ** 18));
+    await tx1.wait();
     console.log("   DAI -> USDC rate: 1:1");
     
-    await routerContract.setExchangeRate(mockLINK.address, usdcAddress, BigInt(15) * BigInt(10 ** 18));
+    const tx2 = await routerContract.setExchangeRate(mockLINK.address, usdcAddress, BigInt(15) * BigInt(10 ** 18));
+    await tx2.wait();
     console.log("   LINK -> USDC rate: 15:1");
 
     console.log("\n7. Minting test tokens to MockUniversalRouter...");
-    await usdcContract.mint(universalRouterAddress, BigInt(1_000_000) * BigInt(10 ** 6));
+    const tx3 = await usdcContract.mint(universalRouterAddress, BigInt(1_000_000) * BigInt(10 ** 6));
+    await tx3.wait();
     console.log("   Minted 1,000,000 USDC to router");
 
   } else if (chainId === "11155111") {
@@ -178,11 +181,18 @@ const deployKippuBank: DeployFunction = async function (hre: HardhatRuntimeEnvir
     const routerContract = await hre.ethers.getContract<Contract>("MockUniversalRouter", deployer);
     const usdcContract = await hre.ethers.getContract<Contract>("MockUSDC", deployer);
     
-    await routerContract.setExchangeRate(mockDAI.address, usdcAddress, BigInt(10 ** 18));
-    await routerContract.setExchangeRate(mockLINK.address, usdcAddress, BigInt(15) * BigInt(10 ** 18));
+    const txSepolia1 = await routerContract.setExchangeRate(mockDAI.address, usdcAddress, BigInt(10 ** 18));
+    await txSepolia1.wait();
+    console.log("   DAI -> USDC rate set");
+    
+    const txSepolia2 = await routerContract.setExchangeRate(mockLINK.address, usdcAddress, BigInt(15) * BigInt(10 ** 18));
+    await txSepolia2.wait();
+    console.log("   LINK -> USDC rate set");
 
     console.log("\n6. Minting test tokens to MockUniversalRouter...");
-    await usdcContract.mint(universalRouterAddress, BigInt(1_000_000) * BigInt(10 ** 6));
+    const txSepolia3 = await usdcContract.mint(universalRouterAddress, BigInt(1_000_000) * BigInt(10 ** 6));
+    await txSepolia3.wait();
+    console.log("   Minted 1,000,000 USDC to router");
 
   } else {
     throw new Error(`No configuration for chain ID ${chainId}`);
@@ -209,25 +219,30 @@ const deployKippuBank: DeployFunction = async function (hre: HardhatRuntimeEnvir
   console.log("\n=== Configuring KipuBankV3 ===");
 
   console.log("\n1. Registering USDC token...");
-  await kipuBank.registerToken(usdcAddress, usdcOracleAddress);
+  const txConfig1 = await kipuBank.registerToken(usdcAddress, usdcOracleAddress);
+  await txConfig1.wait();
   console.log("   USDC registered");
 
   const mockDAI = await hre.deployments.get("MockDAI");
   const daiOracle = await hre.deployments.get("MockV3Aggregator_DAI");
   console.log("\n2. Registering DAI token...");
-  await kipuBank.registerToken(mockDAI.address, daiOracle.address);
+  const txConfig2 = await kipuBank.registerToken(mockDAI.address, daiOracle.address);
+  await txConfig2.wait();
   console.log("   DAI registered");
 
   const mockLINK = await hre.deployments.get("MockLINK");
   const linkOracle = await hre.deployments.get("MockV3Aggregator_LINK");
   console.log("\n3. Registering LINK token...");
-  await kipuBank.registerToken(mockLINK.address, linkOracle.address);
+  const txConfig3 = await kipuBank.registerToken(mockLINK.address, linkOracle.address);
+  await txConfig3.wait();
   console.log("   LINK registered");
 
   console.log("\n4. Adding supported tokens for swaps...");
-  await kipuBank.addSupportedToken(mockDAI.address);
+  const txConfig4 = await kipuBank.addSupportedToken(mockDAI.address);
+  await txConfig4.wait();
   console.log("   DAI marked as supported");
-  await kipuBank.addSupportedToken(mockLINK.address);
+  const txConfig5 = await kipuBank.addSupportedToken(mockLINK.address);
+  await txConfig5.wait();
   console.log("   LINK marked as supported");
 
   console.log("\n=== Deployment Complete ===\n");

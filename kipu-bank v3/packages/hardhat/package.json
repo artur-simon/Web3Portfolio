@@ -19,7 +19,8 @@
     "lint": "eslint",
     "lint-staged": "eslint",
     "test": "REPORT_GAS=true hardhat test --network hardhat",
-    "verify": "hardhat etherscan-verify"
+    "verify": "hardhat etherscan-verify",
+    "verify:retry": "hardhat run scripts/verifyWithRetry.ts"
   },
   "dependencies": {
     "@chainlink/contracts": "1.4.0",
