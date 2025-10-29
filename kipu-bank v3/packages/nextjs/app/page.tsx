@@ -6,28 +6,48 @@ import { useAccount } from "wagmi";
 import { formatEther, parseEther } from "viem";
 import { Address } from "~~/components/scaffold-eth";
 import { useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { TokenBalances } from "./_components/TokenBalances";
+import { SwapHistory } from "./_components/SwapHistory";
+import { getAvailableTokens, formatTokenAmount, parseTokenAmount, ETH_ALIAS } from "~~/utils/tokens";
+import { useTokenApproval } from "~~/hooks/useTokenApproval";
 
 const Home: NextPage = () => {
   const { address: connectedAddress } = useAccount();
+  const { targetNetwork } = useTargetNetwork();
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [selectedDepositToken, setSelectedDepositToken] = useState("ETH");
 
-  const ETH_ADDRESS = "0x0000000000000000000000000000000000000001";
+  const availableTokens = getAvailableTokens(targetNetwork.id);
+  const selectedToken = availableTokens.find(t => t.symbol === selectedDepositToken) || availableTokens[0];
+  const depositAmountBigInt = depositAmount ? parseTokenAmount(depositAmount, selectedToken.decimals) : 0n;
+
+  const {
+    needsApproval,
+    approve,
+    isApprovePending,
+    isApproveConfirming,
+    isApproveSuccess,
+  } = useTokenApproval(
+    selectedToken.symbol !== "ETH" ? (selectedToken.address as `0x${string}`) : undefined,
+    depositAmountBigInt,
+  );
 
   const { data: userBalance } = useScaffoldReadContract({
     contractName: "KipuBankV3",
     functionName: "checkBalance",
-    args: [connectedAddress, ETH_ADDRESS],
+    args: [connectedAddress, ETH_ALIAS],
   });
 
-  const { data: totalBankBalanceUSDC } = useScaffoldReadContract({
+  const { data: totalBankBalanceUSD8 } = useScaffoldReadContract({
     contractName: "KipuBankV3",
-    functionName: "totalBankBalanceUSDC",
+    functionName: "totalBankBalanceUSD8",
   });
 
   const { data: remainingCapacity } = useScaffoldReadContract({
     contractName: "KipuBankV3",
-    functionName: "remainingBankCapacityUSDC",
+    functionName: "remainingBankCapacityUSD8",
   });
 
   const { data: depositCount } = useScaffoldReadContract({
@@ -42,15 +62,15 @@ const Home: NextPage = () => {
 
   const { data: bankCap } = useScaffoldReadContract({
     contractName: "KipuBankV3",
-    functionName: "BANK_CAP_USDC",
+    functionName: "BANK_CAP_USD8",
   });
 
   const { data: maxWithdraw } = useScaffoldReadContract({
     contractName: "KipuBankV3",
-    functionName: "MAX_WITHDRAW_PER_TX_USDC",
+    functionName: "MAX_WITHDRAW_PER_TX_USD8",
   });
 
-  const { writeContractAsync: depositETH, isPending: isDepositPending } = useScaffoldWriteContract("KipuBankV3");
+  const { writeContractAsync: writeContract, isPending: isDepositPending } = useScaffoldWriteContract("KipuBankV3");
 
   const { writeContractAsync: withdraw, isPending: isWithdrawPending } = useScaffoldWriteContract("KipuBankV3");
 
@@ -58,10 +78,22 @@ const Home: NextPage = () => {
     if (!depositAmount || parseFloat(depositAmount) <= 0) return;
 
     try {
-      await depositETH({
-        functionName: "depositETH",
-        value: parseEther(depositAmount),
-      });
+      if (selectedToken.symbol === "ETH") {
+        await writeContract({
+          functionName: "depositETH",
+          value: parseEther(depositAmount),
+        });
+      } else if (selectedToken.symbol === "USDC") {
+        await writeContract({
+          functionName: "depositERC20",
+          args: [selectedToken.address as `0x${string}`, depositAmountBigInt],
+        });
+      } else {
+        await writeContract({
+          functionName: "depositArbitraryToken",
+          args: [selectedToken.address as `0x${string}`, depositAmountBigInt],
+        });
+      }
       setDepositAmount("");
     } catch (error) {
       console.error("Deposit failed:", error);
@@ -74,7 +106,7 @@ const Home: NextPage = () => {
     try {
       await withdraw({
         functionName: "withdraw",
-        args: [ETH_ADDRESS, parseEther(withdrawAmount)],
+        args: [ETH_ALIAS, parseEther(withdrawAmount)],
       });
       setWithdrawAmount("");
     } catch (error) {
@@ -82,9 +114,9 @@ const Home: NextPage = () => {
     }
   };
 
-  const formatUSDC = (value: bigint | undefined) => {
+  const formatUSD8 = (value: bigint | undefined) => {
     if (!value) return "0.00";
-    return (Number(value) / 1e6).toLocaleString("en-US", {
+    return (Number(value) / 1e8).toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
@@ -94,8 +126,8 @@ const Home: NextPage = () => {
     <div className="flex items-center flex-col grow pt-10">
       <div className="px-5 w-full max-w-5xl">
         <h1 className="text-center mb-8">
-          <span className="block text-4xl font-bold mb-2">Kipu Bank</span>
-          <span className="block text-xl">Decentralized ETH Banking</span>
+          <span className="block text-4xl font-bold mb-2">Kipu Bank V3</span>
+          <span className="block text-xl">Multi-Token Banking with Auto-Swap</span>
         </h1>
 
         <div className="flex justify-center items-center space-x-2 flex-col mb-8">
@@ -111,24 +143,42 @@ const Home: NextPage = () => {
 
           <div className="bg-base-200 rounded-xl p-6 text-center">
             <div className="text-sm text-base-content/70 mb-2">Bank Total (USD)</div>
-            <div className="text-3xl font-bold">${formatUSDC(totalBankBalanceUSDC)}</div>
+            <div className="text-3xl font-bold">${formatUSD8(totalBankBalanceUSD8)}</div>
             <div className="text-xs text-base-content/50 mt-1">
-              Cap: ${formatUSDC(bankCap)}
+              Cap: ${formatUSD8(bankCap)}
             </div>
           </div>
 
           <div className="bg-base-200 rounded-xl p-6 text-center">
             <div className="text-sm text-base-content/70 mb-2">Remaining Capacity</div>
-            <div className="text-3xl font-bold">${formatUSDC(remainingCapacity)}</div>
+            <div className="text-3xl font-bold">${formatUSD8(remainingCapacity)}</div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <div className="bg-base-100 rounded-xl p-6 shadow-lg">
-            <h2 className="text-2xl font-bold mb-4">Deposit ETH</h2>
+            <h2 className="text-2xl font-bold mb-4">Deposit Tokens</h2>
+            
+            <div className="form-control mb-4">
+              <label className="label">
+                <span className="label-text">Select Token</span>
+              </label>
+              <select
+                className="select select-bordered w-full"
+                value={selectedDepositToken}
+                onChange={e => setSelectedDepositToken(e.target.value)}
+              >
+                {availableTokens.map(token => (
+                  <option key={token.symbol} value={token.symbol}>
+                    {token.logo} {token.symbol} - {token.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Amount (ETH)</span>
+                <span className="label-text">Amount ({selectedToken.symbol})</span>
               </label>
               <input
                 type="number"
@@ -140,10 +190,38 @@ const Home: NextPage = () => {
                 min="0"
               />
             </div>
+
+            {selectedToken.symbol !== "ETH" && selectedToken.symbol !== "USDC" && depositAmount && (
+              <div className="alert alert-info mt-3 text-xs">
+                <span>💱 {selectedToken.symbol} will be automatically swapped to USDC</span>
+              </div>
+            )}
+
+            {needsApproval && selectedToken.symbol !== "ETH" && (
+              <button
+                className="btn btn-warning w-full mt-4"
+                onClick={approve}
+                disabled={!connectedAddress || isApprovePending || isApproveConfirming}
+              >
+                {isApprovePending || isApproveConfirming ? (
+                  <span className="loading loading-spinner"></span>
+                ) : (
+                  `Approve ${selectedToken.symbol}`
+                )}
+              </button>
+            )}
+
             <button
               className="btn btn-primary w-full mt-4"
               onClick={handleDeposit}
-              disabled={!connectedAddress || isDepositPending || !depositAmount}
+              disabled={
+                !connectedAddress ||
+                isDepositPending ||
+                !depositAmount ||
+                (needsApproval && selectedToken.symbol !== "ETH") ||
+                isApprovePending ||
+                isApproveConfirming
+              }
             >
               {isDepositPending ? <span className="loading loading-spinner"></span> : "Deposit"}
             </button>
@@ -173,9 +251,14 @@ const Home: NextPage = () => {
               {isWithdrawPending ? <span className="loading loading-spinner"></span> : "Withdraw"}
             </button>
             <div className="text-xs text-base-content/50 mt-2 text-center">
-              Max per transaction: ${formatUSDC(maxWithdraw)}
+              Max per transaction: ${formatUSD8(maxWithdraw)}
             </div>
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <TokenBalances />
+          <SwapHistory />
         </div>
 
         <div className="bg-base-200 rounded-xl p-6">
